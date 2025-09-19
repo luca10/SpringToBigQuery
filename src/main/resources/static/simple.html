@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query BigQuery (Semplice)</title>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; background:#f6f8fb; }
+        .card { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.06); padding: 20px; }
+        h1 { margin: 0 0 4px; font-size: 22px; }
+        p { margin: 0 0 16px; color:#555; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        label { font-weight: 600; color:#333; display:block; margin-bottom:6px; }
+        input, textarea, select { width: 100%; padding: 10px; border:1px solid #dfe3e8; border-radius: 8px; font-size: 14px; }
+        textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .row { margin-bottom: 14px; }
+        .actions { display:flex; gap:10px; margin-top: 10px; }
+        button { background:#2563eb; color:#fff; border:0; padding:10px 16px; border-radius:8px; cursor:pointer; font-weight:600; }
+        button.secondary { background:#e5e7eb; color:#111; }
+        .results { margin-top: 18px; padding: 14px; background:#fafafa; border:1px solid #eee; border-radius:8px; }
+        table { width:100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 8px 10px; border-bottom:1px solid #eee; text-align:left; }
+        th { background:#f3f4f6; }
+        .error { color:#b91c1c; background:#fee2e2; border:1px solid #fecaca; padding:10px; border-radius:8px; }
+        .ok { color:#065f46; background:#d1fae5; border:1px solid #a7f3d0; padding:10px; border-radius:8px; }
+        small { color:#666; }
+    </style>
+    <script>
+        async function submitStructured(e){
+            e.preventDefault();
+            const table = document.getElementById('table').value.trim();
+            const select = document.getElementById('select').value.trim();
+            const filtersRaw = document.getElementById('filters').value.trim();
+            const orderByRaw = document.getElementById('orderBy').value.trim();
+            const limit = parseInt(document.getElementById('limit').value || '100', 10);
+            const exportCsv = document.getElementById('export').checked;
+
+            if(!table){ showError('Inserisci la tabella (dataset.table o project.dataset.table)'); return; }
+
+            const req = { table, limit, export: exportCsv };
+            if(select){ req.select = select.split(',').map(s=>s.trim()).filter(Boolean); }
+            if(orderByRaw){ req.orderBy = orderByRaw.split(',').map(s=>s.trim()).filter(Boolean); }
+            if(filtersRaw){
+                // key=value per riga
+                const filters = {};
+                filtersRaw.split('\n').forEach(line=>{
+                    const t = line.trim();
+                    if(!t) return;
+                    const idx = t.indexOf('=');
+                    if(idx === -1){ return; }
+                    const k = t.slice(0, idx).trim();
+                    let v = t.slice(idx+1).trim();
+                    if(v === 'true') v = true;
+                    else if(v === 'false') v = false;
+                    else if(!isNaN(Number(v))) v = Number(v);
+                    filters[k] = v;
+                });
+                req.filters = filters;
+            }
+
+            const resultsEl = document.getElementById('results');
+            resultsEl.innerHTML = '<small>⏳ Esecuzione...</small>';
+            try{
+                const res = await fetch('/bigquery/query-structured',{
+                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(req)
+                });
+
+                if(exportCsv){
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'export.csv'; a.click();
+                    window.URL.revokeObjectURL(url);
+                    resultsEl.innerHTML = '<div class="ok">✅ CSV scaricato</div>';
+                    return;
+                }
+
+                const data = await res.json();
+                if(data && data.errore){
+                    showError(data.messaggio || 'Errore sconosciuto');
+                    return;
+                }
+                renderTable(data || []);
+            }catch(err){
+                showError(err.message);
+            }
+        }
+
+        function showError(msg){
+            document.getElementById('results').innerHTML = '<div class="error">❌ ' + msg + '</div>';
+        }
+
+        function renderTable(rows){
+            const resultsEl = document.getElementById('results');
+            if(!rows.length){ resultsEl.innerHTML = '<small>Nessun risultato.</small>'; return; }
+            const headers = Object.keys(rows[0]);
+            let html = '<div class="results"><table><thead><tr>' + headers.map(h=>`<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+            html += rows.map(r=>'<tr>' + headers.map(h=>`<td>${r[h] ?? ''}</td>`).join('') + '</tr>').join('');
+            html += '</tbody></table></div>';
+            resultsEl.innerHTML = html;
+        }
+    </script>
+    </head>
+<body>
+    <div class="card">
+        <h1>Query BigQuery - Modalità semplice</h1>
+        <p>Compila i campi e invia. Niente SQL necessario.</p>
+
+        <form onsubmit="submitStructured(event)">
+            <div class="row">
+                <label for="table">Tabella (dataset.table o project.dataset.table)</label>
+                <input id="table" placeholder="my_project.my_dataset.my_table" />
+            </div>
+
+            <div class="grid">
+                <div class="row">
+                    <label for="select">Colonne (separate da virgola)</label>
+                    <input id="select" placeholder="id,name,created_at" />
+                </div>
+                <div class="row">
+                    <label for="orderBy">Ordinamento (es. -created_at, name)</label>
+                    <input id="orderBy" placeholder="-created_at,name" />
+                </div>
+            </div>
+
+            <div class="row">
+                <label for="filters">Filtri (uno per riga in formato chiave=valore)</label>
+                <textarea id="filters" placeholder="status=PAID
+country=IT
+amount=100"></textarea>
+                <small>Valori numerici e booleani vengono riconosciuti automaticamente.</small>
+            </div>
+
+            <div class="grid">
+                <div class="row">
+                    <label for="limit">Limite</label>
+                    <input id="limit" type="number" value="100" />
+                </div>
+                <div class="row">
+                    <label><input id="export" type="checkbox" /> Esporta CSV</label>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button type="submit">Esegui</button>
+                <a class="button-link" href="/swagger-ui.html"><button class="secondary" type="button">Apri Swagger</button></a>
+                <a class="button-link" href="/"><button class="secondary" type="button">Pagina avanzata</button></a>
+            </div>
+        </form>
+
+        <div id="results" style="margin-top:12px;"></div>
+    </div>
+</body>
+</html>
+
+
+
